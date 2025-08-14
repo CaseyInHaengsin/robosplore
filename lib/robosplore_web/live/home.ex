@@ -22,6 +22,10 @@ defmodule RobosploreWeb.Home do
             <button phx-click="stop-game" phx-value-pid={inspect(pid)} class="btn btn-danger ml-2">
               Stop
             </button>
+
+            <.link class="btn" href={~p"/game/#{inspect(pid)}"}>
+              View
+            </.link>
           </li>
         </ul>
       </div>

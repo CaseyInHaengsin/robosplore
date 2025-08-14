@@ -18,6 +18,7 @@ defmodule RobosploreWeb.Router do
     pipe_through :browser
 
     live "/", Home
+    live "/game/:pid", GameLive
   end
 
   # Other scopes may use custom stacks.

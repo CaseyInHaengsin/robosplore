@@ -1,13 +1,10 @@
 defmodule RobosploreWeb.Home do
   use RobosploreWeb, :live_view
+  alias Robosplore.Game
 
   def mount(_params, _session, socket) do
-    if connected?(socket) do
-      Phoenix.PubSub.subscribe(Robosplore.PubSub, "game_updates")
-    end
-
-    {:ok,
-     socket |> assign(:games, DynamicSupervisor.which_children(Robosplore.DynamicSupervisor))}
+    if connected?(socket), do: Phoenix.PubSub.subscribe(Robosplore.PubSub, "game_updates")
+    {:ok, socket |> assign(:games, Game.list())}
   end
 
   def render(assigns) do
@@ -17,15 +14,13 @@ defmodule RobosploreWeb.Home do
       <div class="mt-4">
         <h2 class="text-2xl font-bold">Active Games</h2>
         <ul class="list-disc pl-5">
-          <li :for={{_, pid, _type, _modules} <- @games}>
-            <span>Game PID: {inspect(pid)}</span>
-            <button phx-click="stop-game" phx-value-pid={inspect(pid)} class="btn btn-danger ml-2">
-              Stop
+          <li :for={id <- @games}>
+            <span>Game {id}</span>
+            <.link class="btn" href={~p"/host/#{id}"}> View </.link>
+            <.link class="btn" href={~p"/join/#{id}"}> Join </.link>
+            <button phx-click="stop-game" phx-value-id={id} class="btn text-red-500">
+              <.icon name="hero-trash" />
             </button>
-
-            <.link class="btn" href={~p"/game/#{inspect(pid)}"}>
-              View
-            </.link>
           </li>
         </ul>
       </div>
@@ -34,24 +29,15 @@ defmodule RobosploreWeb.Home do
   end
 
   def handle_event("new-game", _params, socket) do
-    {:ok, _} =
-      DynamicSupervisor.start_child(
-        Robosplore.DynamicSupervisor,
-        {Robosplore.Game, [{"key", "value"}]}
-      )
-
-    Phoenix.PubSub.broadcast(Robosplore.PubSub, "game_updates", :get_children)
-
+    Game.create()
+    Phoenix.PubSub.broadcast(Robosplore.PubSub, "game_updates", :refresh)
     {:noreply, socket}
   end
 
-  def handle_event("stop-game", %{"pid" => pid}, socket) do
-    case DynamicSupervisor.terminate_child(
-           Robosplore.DynamicSupervisor,
-           str_to_pid(pid)
-         ) do
+  def handle_event("stop-game", %{"id" => id}, socket) do
+    case Game.stop(id) do
       :ok ->
-        Phoenix.PubSub.broadcast(Robosplore.PubSub, "game_updates", :get_children)
+        Phoenix.PubSub.broadcast(Robosplore.PubSub, "game_updates", :refresh)
         {:noreply, socket}
 
       {:error, reason} ->
@@ -59,15 +45,7 @@ defmodule RobosploreWeb.Home do
     end
   end
 
-  def handle_info(:get_children, socket) do
-    {:noreply,
-     socket |> assign(:games, DynamicSupervisor.which_children(Robosplore.DynamicSupervisor))}
-  end
-
-  defp str_to_pid(pid) do
-    pid
-    |> String.trim_leading("#PID")
-    |> to_charlist()
-    |> :erlang.list_to_pid()
+  def handle_info(:refresh, socket) do
+    {:noreply, socket |> assign(:games, Game.list())}
   end
 end

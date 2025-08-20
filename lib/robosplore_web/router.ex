@@ -18,7 +18,9 @@ defmodule RobosploreWeb.Router do
     pipe_through :browser
 
     live "/", Home
-    live "/game/:pid", GameLive
+    live "/host/:game_id", HostLive
+    live "/play/:game_id/:player_id", PlayLive
+    get "/join/:game_id", JoinController, :join
   end
 
   # Other scopes may use custom stacks.

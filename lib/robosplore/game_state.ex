@@ -82,4 +82,8 @@ defmodule Robosplore.GameState do
 
     {state, player.id}
   end
+
+  def bot_command(state, bot_id, command) do
+    Map.update!(state, :instructions, &Map.put(&1, bot_id, command))
+  end
 end

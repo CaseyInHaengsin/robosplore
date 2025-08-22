@@ -27,6 +27,13 @@ defmodule Robosplore.Game do
     end
   end
 
+  def leave(id, player_id) do
+    case :global.whereis_name(id) do
+      :undefined -> :not_found
+      pid -> GenServer.cast(pid, {:leave, player_id})
+    end
+  end
+
   def bot_command(id, bot_id, command) do
     case :global.whereis_name(id) do
       :undefined -> :not_found
@@ -51,7 +58,7 @@ defmodule Robosplore.Game do
 
   @impl true
   def init(id) do
-    :timer.send_interval(:timer.seconds(1), self(), :tick)
+    :timer.send_interval(300, self(), :tick)
     {:ok, GameState.new(id)}
   end
 
@@ -75,27 +82,58 @@ defmodule Robosplore.Game do
     {:noreply, state}
   end
 
+  def handle_cast({:leave, player_id}, state) do
+    state = GameState.remove_player(state, player_id)
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(:tick, state) do
     bot_map = Enum.into(state.bots, %{}, &{&1.id, &1})
     player_map = Enum.into(state.players, %{}, &{&1.id, &1})
 
-    {bot_map, results} =
+    {{bot_map, player_map}, results} =
       state.instructions
-      |> Enum.reduce({bot_map, %{}}, fn {bot_id, cmd}, {bots, results} ->
+      |> Enum.reduce({{bot_map, player_map}, %{}}, fn {bot_id, cmd}, {{bots, players}, results} ->
         bot = Map.get(bots, bot_id)
-        player = Map.get(player_map, bot.player_id)
-        {bot, result} = bot |> apply_instruction(cmd, state.map, player)
+        player = Map.get(players, bot.player_id)
+
+        {bot, player, new_bot, result} =
+          case apply_instruction(cmd, state.map, bot, player) do
+            {:update, {bot, player}} ->
+              {bot, player, nil, "success"}
+
+            {:create, {bot, player}} ->
+              new_bot = Bot.new(player)
+              token = Base.encode64("#{state.id}::#{bot.token}", padding: false)
+              {bot, player, new_bot, "success: #{token}"}
+
+            {:error, message} ->
+              {bot, player, nil, message}
+          end
+
+        bots = if new_bot, do: Map.put(bots, new_bot.id, new_bot), else: bots
         bots = Map.put(bots, bot_id, bot)
+        players = Map.put(players, bot.player_id, player)
         results = Map.put(results, bot_id, result)
-        {bots, results}
+        {{bots, players}, results}
       end)
 
     bots = bot_map |> Enum.map(fn {_, bot} -> bot end)
+    players = player_map |> Enum.map(fn {_, player} -> player end)
+
     moved_players = Enum.map(state.instructions, fn {bot_id, _} -> bot_map[bot_id].player_id end)
 
     players =
-      Enum.map(state.players, fn player ->
+      Enum.map(players, fn player ->
+        positions =
+          bots
+          |> Enum.filter(&(&1.player_id == player.id))
+          |> Enum.flat_map(&viewable_tiles/1)
+          |> MapSet.new()
+
+        player = Map.update!(player, :revealed, &MapSet.union(&1, positions))
+
         if player.id in moved_players do
           Map.put(player, :started, true)
         else
@@ -119,64 +157,88 @@ defmodule Robosplore.Game do
     {:noreply, state}
   end
 
-  defp apply_instruction(bot, {:move, dir}, map, _) do
+  defp apply_instruction({:move, dir}, map, bot, player) do
     {x, y} = new_pos = move(bot.position, dir)
 
     cond do
-      x < 0 || y < 0 -> {bot, "failed: hit wall"}
-      x > map.width || y > map.height -> {bot, "failed: hit wall"}
-      Map.get(map.tiles, new_pos) == :water -> {bot, "failed: cannot cross water"}
-      true -> {Map.put(bot, :position, new_pos), "success"}
+      x < 0 || y < 0 -> {:error, "failed: hit wall"}
+      x >= map.width || y >= map.height -> {:error, "failed: hit wall"}
+      Map.get(map.tiles, new_pos) == :water -> {:error, "failed: cannot cross water"}
+      true -> {:update, {Map.put(bot, :position, new_pos), player}}
     end
   end
 
-  defp apply_instruction(bot, :mine, map, _) do
+  defp apply_instruction(:mine, map, bot, player) do
     cur_tile = Map.get(map.tiles, bot.position)
     total_inv = bot.inventory |> Enum.map(fn {_, i} -> i end) |> Enum.sum()
 
     cond do
       cur_tile not in [:iron, :copper, :coal] ->
-        {bot, "failed: current tile is not mineable"}
+        {:error, "failed: current tile is not mineable"}
 
       total_inv >= 10 ->
-        {bot, "failed: bot inventory is full"}
+        {:error, "failed: bot inventory is full"}
 
       true ->
         inv = Map.update(bot.inventory, cur_tile, 1, &(&1 + 1))
-        {Map.put(bot, :inventory, inv), "success"}
+        {:update, {Map.put(bot, :inventory, inv), player}}
     end
   end
 
-  defp apply_instruction(bot, :deposit, _, player) do
+  defp apply_instruction(:deposit, _, bot, player) do
     cond do
-      bot.inventory == %{} -> {bot, "failed: nothing to deposit"}
-      bot.position != player.home -> {bot, "failed: may only deposit resources on home"}
-      # TODO:: update player.inventory
-      true -> {Map.put(bot, :inventory, %{}), "success"}
+      bot.inventory.iron + bot.inventory.copper + bot.inventory.coal == 0 ->
+        {:error, "failed: nothing to deposit"}
+
+      bot.position != player.home ->
+        {:error, "failed: may only deposit resources on home"}
+
+      true ->
+        inv =
+          player.inventory
+          |> Map.update!(:iron, &(&1 + bot.inventory.iron))
+          |> Map.update!(:copper, &(&1 + bot.inventory.copper))
+          |> Map.update!(:coal, &(&1 + bot.inventory.coal))
+
+        {:update,
+         {Map.put(bot, :inventory, %{copper: 0, iron: 0, coal: 0}),
+          Map.put(player, :inventory, inv)}}
     end
   end
 
-  defp apply_instruction(bot, {:build, "BOT"}, _, player) do
-    total_iron = player.inventory[:iron]
-    total_copper = player.inventory[:copper]
-    total_coal = player.inventory[:coal]
+  defp apply_instruction({:build, "BOT"}, _, bot, player) do
+    total_iron = player.inventory.iron
+    total_copper = player.inventory.copper
+    total_coal = player.inventory.coal
 
     cond do
       bot.position != player.home ->
-        {bot, "failed: may only build on home"}
+        {:error, "failed: may only build on home"}
 
       total_iron < 30 || total_copper < 30 || total_coal < 30 ->
-        {bot, "failed: not enough resources. requires 30 each of iron, copper, coal"}
+        {:error, "failed: not enough resources. requires 30 each of iron, copper, coal"}
 
-      # TODO:: update player.inventory
-      # TODO:: add a bot
       true ->
-        {bot, "success"}
+        inv =
+          player.inventory
+          |> Map.update!(:iron, &(&1 - 30))
+          |> Map.update!(:copper, &(&1 - 30))
+          |> Map.update!(:coal, &(&1 - 30))
+
+        {:create, {bot, Map.put(player, :inventory, inv)}}
     end
+  end
+
+  defp apply_instruction({:color, color}, _, bot, player) do
+    {:update, {bot, Map.put(player, :color, color)}}
   end
 
   defp move({x, y}, "NORTH"), do: {x, y - 1}
   defp move({x, y}, "SOUTH"), do: {x, y + 1}
   defp move({x, y}, "EAST"), do: {x + 1, y}
   defp move({x, y}, "WEST"), do: {x - 1, y}
+
+  defp viewable_tiles(%{position: p}) do
+    [p, move(p, "NORTH"), move(p, "SOUTH"), move(p, "EAST"), move(p, "WEST")]
+  end
 end

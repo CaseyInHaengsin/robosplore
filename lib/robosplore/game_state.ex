@@ -1,7 +1,7 @@
 defmodule GameMap do
-  defstruct tiles: %{{0, 0} => :empty}, width: 40, height: 40, buildings: %{}
+  defstruct tiles: %{{0, 0} => :empty}, width: 0, height: 0, buildings: %{}
 
-  def new(width \\ 40, height \\ 40) do
+  def new(width \\ 60, height \\ 60) do
     tiles = for x <- 0..(width - 1), y <- 0..(height - 1), into: %{}, do: {{x, y}, get_tile()}
 
     %GameMap{
@@ -33,7 +33,13 @@ defmodule GameMap do
 end
 
 defmodule Player do
-  defstruct id: nil, home: {0, 0}, name: "", inventory: %{}, started: false
+  defstruct id: nil,
+            home: {0, 0},
+            name: "",
+            color: "red",
+            inventory: %{iron: 0, copper: 0, coal: 0},
+            started: false,
+            revealed: MapSet.new()
 
   def new(name, map) do
     %Player{
@@ -45,7 +51,11 @@ defmodule Player do
 end
 
 defmodule Bot do
-  defstruct id: nil, token: nil, player_id: nil, position: {0, 0}, inventory: %{}
+  defstruct id: nil,
+            token: nil,
+            player_id: nil,
+            position: {0, 0},
+            inventory: %{iron: 0, copper: 0, coal: 0}
 
   def new(player) do
     %Bot{
@@ -81,6 +91,17 @@ defmodule Robosplore.GameState do
     }
 
     {state, player.id}
+  end
+
+  def remove_player(state, player_id) do
+    bot_ids = state.bots |> Enum.filter(&(&1.player_id == player_id)) |> Enum.map(& &1.id)
+
+    %Robosplore.GameState{
+      state
+      | players: state.players |> Enum.reject(&(&1.id == player_id)),
+        bots: state.bots |> Enum.reject(&(&1.player_id == player_id)),
+        instructions: Enum.reduce(bot_ids, state.instructions, &Map.delete(&2, &1))
+    }
   end
 
   def bot_command(state, bot_id, command) do

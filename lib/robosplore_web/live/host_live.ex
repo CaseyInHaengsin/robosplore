@@ -22,20 +22,44 @@ defmodule RobosploreWeb.HostLive do
         >
         </li>
         <li
-          :for={%{home: {x, y}} <- @state.players}
-          style={"left: #{x * 16}px; top: #{y * 16}px; background: repeating-linear-gradient(45deg, transparent, transparent 2px, red 2px, red 4px);"}
+          :for={%{home: {x, y}, color: color} <- @state.players}
+          style={"left: #{x * 16}px; top: #{y * 16}px; background: repeating-linear-gradient(45deg, transparent, transparent 2px, #{color} 2px, #{color} 4px);"}
           class="absolute size-4"
         >
         </li>
         <li
-          :for={%{position: {x, y}} <- @state.bots}
-          style={"left: #{x * 16}px; top: #{y * 16}px; background: red;"}
+          :for={%{position: {x, y}, player_id: pid} <- @state.bots}
+          style={"left: #{x * 16}px; top: #{y * 16}px; background: #{bot_color(@state.players, pid)};"}
           class="absolute size-4 rounded-full border border-2 transition-all"
         >
         </li>
       </ul>
+      <div class="pt-[1000px] hidden">
+        <label class="font-bold text-sm">Players</label>
+        <ul>
+          <li :for={player <- @state.players} class="flex gap-2 items-center">
+            <span class="size-4 inline-block shrink-0 relative" style={"background: #{player.color};"}>
+              <.icon
+                :if={player.started}
+                name="hero-check"
+                class="size-4 absolute top-0 left-0 text-white"
+              />
+            </span>
+            {player.id} {inspect(player.home)}
+            {inspect(player.inventory)}
+            <button phx-click="kick-player" phx-value-id={player.id} class="btn text-red-500">
+              <.icon name="hero-trash" />
+            </button>
+          </li>
+        </ul>
+      </div>
     </div>
     """
+  end
+
+  def handle_event("kick-player", %{"id" => id}, socket) do
+    Game.leave(socket.assigns.state.id, id)
+    {:noreply, socket}
   end
 
   def handle_info(:refresh, socket) do
@@ -43,9 +67,13 @@ defmodule RobosploreWeb.HostLive do
     {:noreply, socket |> assign(:state, state)}
   end
 
+  defp bot_color(players, pid) do
+    Enum.find(players, &(&1.id == pid)).color
+  end
+
   defp get_color(:iron), do: "#a5a5a5"
   defp get_color(:copper), do: "#f3b135"
-  defp get_color(:coal), do: "black"
+  defp get_color(:coal), do: "#555"
   defp get_color(:water), do: "#3dacfa"
   defp get_color(:empty), do: "#bfffc2"
 end

@@ -92,8 +92,19 @@ defmodule RobosploreWeb.BotChannel do
       %{"cmd" => "BUILD"} ->
         {:error, "Build command is missing a recipe"}
 
+      %{"cmd" => "COLOR", "color" => color} when is_binary(color) ->
+        if Regex.match?(~r/#[0-9A-Fa-f]{6}/, color) do
+          {:ok, {:color, color}}
+        else
+          {:error, "Color command expects a hex color (i.e. #ff8100)"}
+        end
+
+      %{"cmd" => "COLOR"} ->
+        {:error, "Color command is missing a hex color (i.e. #ff8100)"}
+
       %{"cmd" => cmd} ->
-        {:error, "Unknown command: #{inspect(cmd)}. Valid commands are: MOVE MINE DEPOSIT BUILD"}
+        {:error,
+         "Unknown command: #{inspect(cmd)}. Valid commands are: MOVE MINE DEPOSIT BUILD COLOR"}
 
       _ ->
         {:error, "Message must contain a cmd"}
